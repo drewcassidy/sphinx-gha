@@ -11,5 +11,9 @@ Add your content using ``reStructuredText`` syntax. See the
 documentation for details.
 
 
-.. gh-action:: foo
+.. gh-action::
+    :path: /Users/drewcassidy/Code/yaclog/action.yaml
+
+    hello
+
 

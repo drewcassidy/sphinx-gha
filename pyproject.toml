@@ -28,7 +28,7 @@ classifiers = [
 
 requires-python = ">= 3.9"
 dependencies = [
-    "Sphinx >= 4.0",
+    "Sphinx >= 7.4",
     "pyyaml >= 6.0"
 ]
 dynamic = ["version"]
