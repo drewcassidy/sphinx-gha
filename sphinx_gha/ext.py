@@ -45,6 +45,12 @@ class ActionDirective(SphinxDirective):
             names=[nodes.fully_normalize_name(action_path.parent.name)],
         )
 
+        def markdown_to_nodes(markdown):
+            document = new_document(action_path.__str__(), self.state.document.settings)
+            parser = MystParser()
+            parser.parse(markdown, document)
+            return document.children
+
         def document_values(title, items, directive='confval', metas=None):
             if metas is None:
                 metas = []
@@ -64,17 +70,12 @@ class ActionDirective(SphinxDirective):
                         item_rst.append(indent(f':{meta_tag}: {item_meta[meta_tag]}'))
                 item_nodes = self.parse_text_to_nodes('\n'.join(item_rst))
                 if 'description' in item_meta:
-                    # item_rst.append('')
-                    # item_rst.append(indent(item_meta['description']))
-                    document = new_document(action_path.__str__(), self.state.document.settings)
-                    parser = MystParser()
-                    parser.parse(indent(item_meta['description']), document)
-                    item_nodes[1][1].extend(document.children)
+                    item_nodes[1][1].extend(markdown_to_nodes(item_meta['description']))
                 value_section.extend(item_nodes)
             section.append(value_section)
 
         if 'description' in action_yaml:
-            section.extend(self.parse_text_to_nodes(action_yaml['description']))
+            section.extend(markdown_to_nodes(action_yaml['description']))
 
         if 'x-env' in action_yaml:
             document_values(
