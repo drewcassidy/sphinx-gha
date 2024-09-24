@@ -69,7 +69,7 @@ class ActionDirective(SphinxDirective):
                     document = new_document(action_path.__str__(), self.state.document.settings)
                     parser = MystParser()
                     parser.parse(indent(item_meta['description']), document)
-                    item_nodes[1].extend(document.children)
+                    item_nodes[1][1].extend(document.children)
                 value_section.extend(item_nodes)
             section.append(value_section)
 
