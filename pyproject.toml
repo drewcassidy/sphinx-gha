@@ -29,14 +29,14 @@ classifiers = [
 requires-python = ">= 3.9"
 dependencies = [
     "Sphinx >= 7.4",
-    "pyyaml >= 6.0"
+    "pyyaml >= 6.0",
+    "myst-parser >= 3.0"
 ]
 dynamic = ["version"]
 
 [project.optional-dependencies]
 docs = [
     "sphinx-rtd-theme",
-    "myst-parser >= 0.14",
 ]
 
 [project.urls]
