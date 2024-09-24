@@ -27,6 +27,7 @@ class ActionDirective(SphinxDirective):
     }
 
     def run(self):
+
         action_path = Path(self.options['path'])
 
         with open(action_path, 'rt') as stream:
@@ -41,45 +42,53 @@ class ActionDirective(SphinxDirective):
             names=[nodes.fully_normalize_name(action_path.parent.name)],
         )
 
+        def document_values(title, items, directive='confval', metas=None):
+            if metas is None:
+                metas = []
+            value_section = nodes.section(
+                '',
+                nodes.title(text=title),
+                ids=[nodes.make_id(action_path.parent.name + '_' + title)],
+                names=[nodes.fully_normalize_name(title)],
+            )
+
+            for item_name, item_meta in items.items():
+                if item_meta is None:
+                    item_meta = {}
+                confval = [f'.. {directive} :: {item_name}']
+                for meta_tag in metas:
+                    if meta_tag in item_meta:
+                        confval.append(indent(f':{item_meta}: {item_meta[meta_tag]}'))
+                if 'description' in item_meta:
+                    confval.append('')
+                    confval.append(indent(item_meta['description']))
+
+                value_section.extend(self.parse_text_to_nodes('\n'.join(confval)))
+            section.append(value_section)
+
         if 'description' in action_yaml:
-            section.append(nodes.paragraph('', action_yaml['description']))
+            section.extend(self.parse_text_to_nodes(action_yaml['description']))
+
+        if 'x-env' in action_yaml:
+            document_values(
+                'Environment Variables',
+                action_yaml['x-env'],
+                directive='envvar'
+            )
 
         if 'inputs' in action_yaml:
-            inputs_section = nodes.section(
-                '',
-                nodes.title(text='Inputs'),
-                ids=[nodes.make_id(action_path.parent.name + '_inputs')],
-                names=[nodes.fully_normalize_name('inputs')],
+            document_values(
+                'Inputs',
+                action_yaml['inputs'],
+                metas=['default', 'type']
             )
-
-            for input_name, input_meta in action_yaml['inputs'].items():
-                confval = [f'.. confval:: {input_name}']
-                for meta in ['default', 'type']:
-                    if meta in input_meta:
-                        confval.append(indent(f':{meta}: {input_meta[meta]}'))
-                if 'description' in input_meta:
-                    confval.append('')
-                    confval.append(indent(input_meta['description']))
-
-                inputs_section.extend(self.parse_text_to_nodes('\n'.join(confval)))
-            section.append(inputs_section)
 
         if 'outputs' in action_yaml:
-            outputs_section = nodes.section(
-                '',
-                nodes.title(text='Outputs'),
-                ids=[nodes.make_id(action_path.parent.name + '_outputs')],
-                names=[nodes.fully_normalize_name('outputs')],
+            document_values(
+                'Outputs',
+                action_yaml['outputs'],
             )
-            for output_name, output_meta in action_yaml['outputs'].items():
-                confval = [f'.. confval:: {output_name}']
 
-                if 'description' in output_meta:
-                    confval.append('')
-                    confval.append(indent(output_meta['description']))
-
-                outputs_section.extend(self.parse_text_to_nodes('\n'.join(confval)))
-            section.append(outputs_section)
         return [section]
 
 
