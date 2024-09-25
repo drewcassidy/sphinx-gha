@@ -13,7 +13,3 @@ documentation for details.
 
 .. gh-action::
     :path: /Users/drewcassidy/Code/yaclog/action.yaml
-
-    hello
-
-
