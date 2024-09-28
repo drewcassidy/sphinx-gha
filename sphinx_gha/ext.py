@@ -1,20 +1,25 @@
 import os
 import typing as ty
 from pathlib import Path
+from typing import Iterable
 
+import sphinx
 import yaml
 from docutils import nodes
-from docutils.nodes import Element
+from docutils.nodes import Element, warning, admonition
 from docutils.parsers.rst import directives, Directive
 from myst_parser.mdit_to_docutils.base import DocutilsRenderer
 from myst_parser.mdit_to_docutils.sphinx_ import SphinxRenderer
-from myst_parser.mocking import MockInliner, MockStateMachine, MockState
 from myst_parser.parsers.mdit import create_md_parser
-from myst_parser.parsers.sphinx_ import MystParser
 from sphinx import application
-from sphinx.addnodes import versionmodified
+from sphinx.addnodes import versionmodified, desc_name
+from sphinx.directives import ObjectDescription
+from sphinx.domains import Domain
 from sphinx.domains.std import ConfigurationValue
-from sphinx.util.docutils import SphinxDirective, new_document
+from sphinx.roles import XRefRole
+from sphinx.util import ws_re
+from sphinx.util.docutils import SphinxDirective
+from sphinx.util.nodes import make_refnode
 
 try:
     from yaml import CLoader as Loader, CDumper as Dumper
@@ -44,53 +49,97 @@ class MarkdownParsingMixin(Directive):
         return renderer.current_node.children
 
 
-class ActionItemDirective(ConfigurationValue, MarkdownParsingMixin):
-    _name = 'gh-action-item'
-    option_spec = ConfigurationValue.option_spec | {
-        'required': directives.unchanged_required,
-        'deprecationMessage': directives.unchanged_required
-    }
+class ActionsItemDirective(ObjectDescription[str], MarkdownParsingMixin):
+    index_template: str = '%s'
+    fields = []
+    option_spec = {'description': directives.unchanged_required}
+
+    @classmethod
+    def __init_subclass__(cls, /, **kwargs):
+        cls.option_spec |= {f: directives.unchanged_required for f in cls.fields}
+        cls.option_spec |= ActionsItemDirective.option_spec
 
     @classmethod
     def generate(cls, item_name, item_meta, lineno, content_offset, state, state_machine):
         options = {k: str(v) for k, v in item_meta.items() if k in cls.option_spec}
+        # noinspection PyTypeChecker
         directive = cls('confval', [item_name], options, '', lineno, content_offset, "", state, state_machine)
         node = directive.run()
-        if 'description' in item_meta:
-            directive.parse_markdown(item_meta['description'], node=node[1][1])
         return node
 
-    def format_deprecationMessage(self, message):
-        admonition = versionmodified()
-        admonition['type'] = 'deprecated'
-        admonition.document = self.state.document
-        self.parse_markdown(message, inline=True, node=admonition)
-        return admonition, []
+    def handle_signature(self, sig: str, sig_node) -> str:
+        sig_node.clear()
+        sig_node += desc_name(sig, sig)
+        name = ws_re.sub(' ', sig)
+        sig_node['fullname'] = sig
+        return name
 
-    def format_required(self, required: str):
-        """Formats the ``:type:`` option."""
-        parsed, msgs = self.parse_inline(required, lineno=self.lineno)
+    def _object_hierarchy_parts(self, sig_node) -> tuple[str, ...]:
+        return (sig_node['fullname'],)
+
+    def _toc_entry_name(self, sig_node) -> str:
+        if not sig_node.get('_toc_parts'):
+            return ''
+        name, = sig_node['_toc_parts']
+        return name
+
+    def add_target_and_index(self, name: str, sig: str, signode) -> None:
+        node_id = sphinx.util.nodes.make_id(self.env, self.state.document, self.objtype, name)
+        signode['ids'].append(node_id)
+        self.state.document.note_explicit_target(signode)
+        index_entry = self.index_template % name
+        self.indexnode['entries'].append(('pair', index_entry, node_id, '', None))
+        self.env.domains['std'].note_object(self.objtype, name, node_id, location=signode)
+
+    def format_field (self, field_name: str, field_value: str):
+        parsed, msgs = self.parse_inline(field_value, lineno=self.lineno)
         field = nodes.field(
             '',
-            nodes.field_name('', 'Required'),
+            nodes.field_name('', field_name.title()),
             nodes.field_body('', *parsed),
         )
         return field, msgs
 
     def transform_content(self, content_node) -> None:
+        """Insert fields as a field list."""
         field_list = nodes.field_list()
-        if 'deprecationMessage' in self.options:
-            field, msgs = self.format_default(self.options['default'])
-            field_list.append(field)
-            field_list += msgs
-        if 'required' in self.options:
-            field, msgs = self.format_required(self.options['required'])
-            field_list.append(field)
-            field_list += msgs
+        for field_name in self.fields:
+            if field_value := self.options.get(field_name):
+                field, msgs = self.format_field(field_name, field_value)
+                field_list.append(field)
+                field_list += msgs
         if len(field_list.children) > 0:
             content_node.insert(0, field_list)
 
-        super(ActionItemDirective, self).transform_content(content_node)
+        if description := self.options.get('description'):
+            self.parse_markdown(description, inline=False, node=content_node)
+
+class ActionInputDirective(ActionsItemDirective):
+    fields = ['required', 'type', 'default']
+    option_spec = {'deprecationMessage': directives.unchanged_required}
+
+    def format_deprecationMessage(self, message):
+        admonition = nodes.admonition()
+        admonition['classes'].append('warning')
+        title_text = 'Deprecated'
+        textnodes, msg= self.state.inline_text(title_text, self.lineno)
+        title = nodes.title(title_text, '', *textnodes)
+        title.source, title.line = (
+            self.state_machine.get_source_and_line(self.lineno))
+
+        admonition += title
+        admonition += msg
+
+        admonition['type'] = 'deprecated'
+        admonition.document = self.state.document
+        self.parse_markdown(message, inline=True, node=admonition)
+        return admonition, []
+
+    def transform_content(self, content_node) -> None:
+        super().transform_content(content_node)
+        if deprecation_message := self.options.get('deprecationMessage'):
+            admonition, msgs = self.format_deprecationMessage(deprecation_message)
+            content_node.insert(0, admonition)
 
 
 class ActionDirective(SphinxDirective, MarkdownParsingMixin):
@@ -129,15 +178,7 @@ class ActionDirective(SphinxDirective, MarkdownParsingMixin):
             for item_name, item_meta in items.items():
                 if item_meta is None:
                     item_meta = {}
-                value_section.extend(ActionItemDirective.generate(item_name, item_meta, self.lineno, self.content_offset, self.state, self.state_machine))
-                # item_rst = [f'.. {directive} :: {item_name}']
-                # for meta_tag in metas:
-                #     if meta_tag in item_meta:
-                #         item_rst.append(indent(f':{meta_tag}: {item_meta[meta_tag]}'))
-                # item_nodes = self.parse_text_to_nodes('\n'.join(item_rst))
-                # if 'description' in item_meta:
-                #     item_nodes[1][1].extend(self.parse_markdown(item_meta['description']))
-                # value_section.extend(item_nodes)
+                value_section.extend(ActionInputDirective.generate(item_name, item_meta, self.lineno, self.content_offset, self.state, self.state_machine))
             section.append(value_section)
 
         if 'description' in action_yaml:
@@ -163,15 +204,57 @@ class ActionDirective(SphinxDirective, MarkdownParsingMixin):
                 action_yaml['outputs'],
             )
 
-        # foo = ConfigurationValue('confval', ['butts'], {'type': 'butts'}, 'this is butts', self.lineno, self.content_offset, "", self.state, self.state_machine)
-        # section.extend(foo.run())
-
         return [section]
 
 
+class GHActionsDomain(Domain):
+    name = 'gh-actions'
+    label = 'Github Actions'
+    roles = {
+        'action': XRefRole()
+    }
+    directives = {
+        'action': ActionDirective,
+        'action-input': ActionInputDirective,
+    }
+
+    initial_data = {
+        'actions': []
+    }
+
+    def get_full_qualified_name(self, node):
+        return f'gh-actions.{node.arguments[0]}'
+
+    def get_objects(self) -> Iterable[tuple[str, str, str, str, str, int]]:
+        yield from self.data['actions']
+
+    def resolve_xref(self, env, fromdocname, builder, typ, target, node, contnode):
+        match = [
+            (docname, anchor) for name, sig, typ, docname, anchor, prio in self.get_objects() if sig == target
+        ]
+
+        if len(match) > 0:
+            todocname = match[0][0]
+            targ = match[0][1]
+
+            return make_refnode(builder, fromdocname, todocname, targ, contnode, targ)
+
+        else:
+            print('Awww, found nothing')
+            return None
+
+    def add_action(self, signature, full_name):
+        """Add a new action to the domain"""
+        name = f'action.{signature}'
+        anchor = f'action-{signature}'
+
+        self.data['actions'].append((
+            name, full_name, 'gh-action', self.env.docname, anchor, 0
+        ))
+
+
 def setup(app: application.Sphinx) -> ty.Dict[str, ty.Any]:
-    app.add_directive("gh-action", ActionDirective)
-    app.add_directive('gh-action-item', ActionItemDirective)
+    app.add_domain(GHActionsDomain)
     app.add_config_value('sphinx_gha_repo_tag', os.environ.get('READTHEDOCS_GIT_IDENTIFIER'), 'env')
     app.add_config_value('sphinx_gha_repo_slug', 'UNKNOWN REPO', 'env')
     app.add_config_value('sphinx_gha_repo_root', os.getcwd(), 'env')
