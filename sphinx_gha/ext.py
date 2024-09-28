@@ -6,7 +6,7 @@ from typing import Iterable
 import sphinx
 import yaml
 from docutils import nodes
-from docutils.nodes import Element, warning, admonition
+from docutils.nodes import Element, warning, admonition, Node
 from docutils.parsers.rst import directives, Directive
 from myst_parser.mdit_to_docutils.base import DocutilsRenderer
 from myst_parser.mdit_to_docutils.sphinx_ import SphinxRenderer
@@ -14,7 +14,7 @@ from myst_parser.parsers.mdit import create_md_parser
 from sphinx import application
 from sphinx.addnodes import versionmodified, desc_name
 from sphinx.directives import ObjectDescription
-from sphinx.domains import Domain
+from sphinx.domains import Domain, ObjType
 from sphinx.domains.std import ConfigurationValue
 from sphinx.roles import XRefRole
 from sphinx.util import ws_re
@@ -63,7 +63,7 @@ class ActionsItemDirective(ObjectDescription[str], MarkdownParsingMixin):
     def generate(cls, item_name, item_meta, lineno, content_offset, state, state_machine):
         options = {k: str(v) for k, v in item_meta.items() if k in cls.option_spec}
         # noinspection PyTypeChecker
-        directive = cls('confval', [item_name], options, '', lineno, content_offset, "", state, state_machine)
+        directive = cls('', [item_name], options, '', lineno, content_offset, "", state, state_machine)
         node = directive.run()
         return node
 
@@ -89,7 +89,7 @@ class ActionsItemDirective(ObjectDescription[str], MarkdownParsingMixin):
         self.state.document.note_explicit_target(signode)
         index_entry = self.index_template % name
         self.indexnode['entries'].append(('pair', index_entry, node_id, '', None))
-        self.env.domains['std'].note_object(self.objtype, name, node_id, location=signode)
+        # self.env.domains['std'].note_object(self.objtype, name, node_id, location=signode)
 
     def format_field (self, field_name: str, field_value: str):
         parsed, msgs = self.parse_inline(field_value, lineno=self.lineno)
@@ -152,6 +152,8 @@ class ActionDirective(SphinxDirective, MarkdownParsingMixin):
     def run(self):
 
         action_path = Path(self.options['path'])
+        domain_name = self.name.split(':')[0]
+        domain_obj = self.env.domains[domain_name]
 
         with open(action_path, 'rt') as stream:
             action_yaml = yaml.full_load(stream)
@@ -178,7 +180,7 @@ class ActionDirective(SphinxDirective, MarkdownParsingMixin):
             for item_name, item_meta in items.items():
                 if item_meta is None:
                     item_meta = {}
-                value_section.extend(ActionInputDirective.generate(item_name, item_meta, self.lineno, self.content_offset, self.state, self.state_machine))
+                value_section.extend(domain_obj.directive('action-input').generate(item_name, item_meta, self.lineno, self.content_offset, self.state, self.state_machine))
             section.append(value_section)
 
         if 'description' in action_yaml:
@@ -211,7 +213,9 @@ class GHActionsDomain(Domain):
     name = 'gh-actions'
     label = 'Github Actions'
     roles = {
-        'action': XRefRole()
+        'action': XRefRole(),
+        'action-input': XRefRole()
+
     }
     directives = {
         'action': ActionDirective,
@@ -220,6 +224,10 @@ class GHActionsDomain(Domain):
 
     initial_data = {
         'actions': []
+    }
+
+    object_types = {
+        'action-input': ObjType('action-input' )
     }
 
     def get_full_qualified_name(self, node):
