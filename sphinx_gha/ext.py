@@ -6,16 +6,15 @@ from typing import Iterable
 import sphinx
 import yaml
 from docutils import nodes
-from docutils.nodes import Element, warning, admonition, Node
+from docutils.nodes import Element
 from docutils.parsers.rst import directives, Directive
 from myst_parser.mdit_to_docutils.base import DocutilsRenderer
 from myst_parser.mdit_to_docutils.sphinx_ import SphinxRenderer
 from myst_parser.parsers.mdit import create_md_parser
 from sphinx import application
-from sphinx.addnodes import versionmodified, desc_name
+from sphinx.addnodes import desc_name
 from sphinx.directives import ObjectDescription
 from sphinx.domains import Domain, ObjType
-from sphinx.domains.std import ConfigurationValue
 from sphinx.roles import XRefRole
 from sphinx.util import ws_re
 from sphinx.util.docutils import SphinxDirective
@@ -87,9 +86,6 @@ class ActionsItemDirective(ObjectDescription[str], MarkdownParsingMixin):
         node_id = sphinx.util.nodes.make_id(self.env, self.state.document, self.objtype, name)
         signode['ids'].append(node_id)
         self.state.document.note_explicit_target(signode)
-        index_entry = self.index_template % name
-        self.indexnode['entries'].append(('pair', index_entry, node_id, '', None))
-        # self.env.domains['std'].note_object(self.objtype, name, node_id, location=signode)
 
     def format_field (self, field_name: str, field_value: str):
         parsed, msgs = self.parse_inline(field_value, lineno=self.lineno)
@@ -141,6 +137,8 @@ class ActionInputDirective(ActionsItemDirective):
             admonition, msgs = self.format_deprecationMessage(deprecation_message)
             content_node.insert(0, admonition)
 
+class ActionOutputDirective(ActionsItemDirective):
+    pass
 
 class ActionDirective(SphinxDirective, MarkdownParsingMixin):
     has_content = True
@@ -167,45 +165,28 @@ class ActionDirective(SphinxDirective, MarkdownParsingMixin):
             names=[nodes.fully_normalize_name(action_path.parent.name)],
         )
 
-        def document_values(title, items, directive='confval', metas=None):
-            if metas is None:
-                metas = []
-            value_section = nodes.section(
-                '',
-                nodes.title(text=title),
-                ids=[nodes.make_id(action_path.parent.name + '_' + title)],
-                names=[nodes.fully_normalize_name(title)],
-            )
-
-            for item_name, item_meta in items.items():
-                if item_meta is None:
-                    item_meta = {}
-                value_section.extend(domain_obj.directive('action-input').generate(item_name, item_meta, self.lineno, self.content_offset, self.state, self.state_machine))
-            section.append(value_section)
-
         if 'description' in action_yaml:
             section.extend(self.parse_markdown(action_yaml['description']))
 
-        if 'x-env' in action_yaml:
-            document_values(
-                'Environment Variables',
-                action_yaml['x-env'],
-                directive='envvar'
-            )
+        item_lists = [
+            ('inputs', 'Inputs', 'action-input'),
+            ('outputs', 'Outputs', 'action-output'),
+            ('x-env', 'Environment Variables', 'action-input')
+        ]
 
-        if 'inputs' in action_yaml:
-            document_values(
-                'Inputs',
-                action_yaml['inputs'],
-                metas=['default', 'type']
-            )
-
-        if 'outputs' in action_yaml:
-            document_values(
-                'Outputs',
-                action_yaml['outputs'],
-            )
-
+        for (key, title, directive) in item_lists:
+            if item_list := action_yaml.get(key):
+                item_list_section = nodes.section(
+                    '',
+                    nodes.rubric(text=title),
+                    ids=[nodes.make_id(action_path.parent.name + '_' + title)],
+                    names=[nodes.fully_normalize_name(title)],
+                )
+                for item_name, item_meta in item_list.items():
+                    if item_meta is None:
+                        item_meta = {}
+                    item_list_section.extend(domain_obj.directive(directive).generate(item_name, item_meta, self.lineno, self.content_offset, self.state, self.state_machine))
+                section.append(item_list_section)
         return [section]
 
 
@@ -214,12 +195,11 @@ class GHActionsDomain(Domain):
     label = 'Github Actions'
     roles = {
         'action': XRefRole(),
-        'action-input': XRefRole()
-
     }
     directives = {
         'action': ActionDirective,
         'action-input': ActionInputDirective,
+        'action-output': ActionOutputDirective,
     }
 
     initial_data = {
