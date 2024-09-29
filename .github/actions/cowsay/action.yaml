@@ -15,7 +15,7 @@ x-env:
 
 inputs:
   message:
-    description: "What the cow should say"
+    description: "what the cow should say"
     required: True
     x-example: 'moo'
 
@@ -25,8 +25,9 @@ inputs:
     x-example: 'bunny'
 
   dead:
-    description: causes the cow should appear dead
+    description: causes the cow to appear dead
     default: 'False'
+    deprecationMessage: 'Please do not kill the cow'
 
 outputs:
   stdout:

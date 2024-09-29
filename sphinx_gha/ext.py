@@ -2,6 +2,7 @@ import os
 import typing as ty
 from pathlib import Path
 from typing import Iterable
+from collections import OrderedDict
 
 import sphinx
 import yaml
@@ -14,6 +15,7 @@ from myst_parser.parsers.mdit import create_md_parser
 from sphinx import application
 from sphinx.addnodes import desc_name
 from sphinx.directives import ObjectDescription
+from sphinx.directives.patches import Code
 from sphinx.domains import Domain, ObjType
 from sphinx.roles import XRefRole
 from sphinx.util import ws_re
@@ -21,7 +23,7 @@ from sphinx.util.docutils import SphinxDirective
 from sphinx.util.nodes import make_refnode
 
 try:
-    from yaml import CLoader as Loader, CDumper as Dumper
+    from yaml import CLoader as Loader, CDumper as Dumper, SafeDumper
 except ImportError:
     from yaml import Loader, Dumper
 
@@ -151,43 +153,120 @@ class ActionDirective(SphinxDirective, MarkdownParsingMixin):
         'path': directives.unchanged_required,
     }
 
+    def example(self):
+        if example_yaml := self.options.get('x-example'):
+            return example_yaml
+
+        slug = self.env.config['sphinx_gha_repo_slug']
+        if slug is None:
+            self.error("No repo slug provided. please set the sphinx_gha_repo_slug config variable")
+        action_path = Path(self.action_path).parent
+        repo_root = self.env.config['sphinx_gha_repo_root'] or os.getcwd()
+        repo_root = Path(repo_root)
+        relative_path = str(action_path.relative_to(repo_root))
+
+        if relative_path != '.':
+            slug = slug + '/' + relative_path
+
+        action_ref = self.env.config['sphinx_gha_repo_ref']
+
+        if action_ref:
+            slug = slug + '@' + action_ref
+
+        name = self.action_yaml.get('x-example-name')
+        inputs = self.action_yaml.get('x_example_inputs') or {}
+        env = self.action_yaml.get('x_example_env') or {}
+
+        for (k, d, e) in [
+            ('x-env', env, 'example'),
+            ('inputs', inputs, 'x-example')
+        ]:
+            if action_inputs := self.action_yaml.get(k):
+                for input_name, input_meta in action_inputs.items():
+                    input_meta = input_meta or {}
+                    if input_example := input_meta.get(e):
+                        d[input_name] = input_example
+
+        example_yaml = {}
+
+        if name:
+            example_yaml['name'] = name
+        example_yaml['using'] = slug
+        if inputs:
+            example_yaml['with'] = inputs
+        if env:
+            example_yaml['env'] = env
+
+
+        example_yaml = [example_yaml]
+        return yaml.dump(example_yaml, Dumper=SafeDumper, sort_keys=False)
+
     def run(self):
 
-        action_path = self.options.get('path')
+        self.action_path = self.options.get('path')
 
-        if action_path:
-            action_path = Path(self.env.config['sphinx_gha_repo_root']) / action_path
+        if self.action_path:
+            action_path = Path(self.env.config['sphinx_gha_repo_root']) / self.action_path
             for extension in ['yml', 'yaml']:
                 test_path = Path(str(action_path) + '.' + extension)
                 if test_path.exists():
-                    action_path = test_path
+                    self.action_path = test_path
 
+
+        if self.action_path:
+            with open(self.action_path, 'rt') as stream:
+                self.action_yaml = yaml.full_load(stream)
+        else:
+            self.action_yaml = {}
+
+        self.action_name = None
         if len(self.arguments) > 0:
-            action_name = self.arguments[0]
-        elif action_path := self.options['path'] and action_path:
-            action_name = Path(action_path).parent.name
+            self.action_name = self.arguments[0]
+        elif 'name' in self.action_yaml:
+            self.action_name = self.action_yaml['name']
+        elif self.action_path:
+            self.action_name = Path(self.action_path).parent.name
         else:
             self.error('Neither a path nor an action name provided!')
+
+        self.action_id = Path(self.action_path).parent.name if self.action_path else self.action_name
 
         domain_name = self.name.split(':')[0]
         domain_obj = self.env.domains[domain_name]
 
-        with open(action_path, 'rt') as stream:
-            action_yaml = yaml.full_load(stream)
 
         # Title
 
         section: nodes.Element = nodes.section(
             '',
-            nodes.title(text=action_yaml['name']),
-            ids=[nodes.make_id(action_path.parent.name)],
-            names=[nodes.fully_normalize_name(action_path.parent.name)],
+            nodes.title(text=self.action_name),
+            ids=[nodes.make_id(self.action_id)],
+            names=[nodes.fully_normalize_name(self.action_id)],
         )
 
-        if 'description' in action_yaml:
-            section.extend(self.parse_markdown(action_yaml['description']))
+        # Description
+
+        if description := self.action_yaml.get('description'):
+            section.extend(self.parse_markdown(description))
 
         section.extend(self.parse_content_to_nodes())
+
+        # Example code
+
+
+        if example_yaml := self.example():
+            code_section = nodes.section(
+                '',
+                nodes.rubric(text='Example'),
+                ids=[nodes.make_id(self.action_name + '_example' )],
+                names=[nodes.fully_normalize_name('example')],
+            )
+
+            code = Code('Code', ['yaml'], {}, content = example_yaml.splitlines(), lineno=self.lineno, content_offset=self.content_offset, block_text='', state=self.state, state_machine=self.state_machine)
+            code_section.extend(code.run())
+            section.append(code_section)
+
+        # Items
 
         item_lists = [
             ('inputs', 'Inputs', 'action-input'),
@@ -196,11 +275,11 @@ class ActionDirective(SphinxDirective, MarkdownParsingMixin):
         ]
 
         for (key, title, directive) in item_lists:
-            if item_list := action_yaml.get(key):
+            if item_list := self.action_yaml.get(key):
                 item_list_section = nodes.section(
                     '',
                     nodes.rubric(text=title),
-                    ids=[nodes.make_id(action_name + '_' + title)],
+                    ids=[nodes.make_id(self.action_id + '_' + title)],
                     names=[nodes.fully_normalize_name(title)],
                 )
                 for item_name, item_meta in item_list.items():
@@ -265,7 +344,7 @@ class GHActionsDomain(Domain):
 
 def setup(app: application.Sphinx) -> ty.Dict[str, ty.Any]:
     app.add_domain(GHActionsDomain)
-    app.add_config_value('sphinx_gha_repo_tag', os.environ.get('READTHEDOCS_GIT_IDENTIFIER'), 'env')
+    app.add_config_value('sphinx_gha_repo_ref', os.environ.get('READTHEDOCS_GIT_IDENTIFIER') or 'main', 'env')
     app.add_config_value('sphinx_gha_repo_slug', 'UNKNOWN REPO', 'env')
     app.add_config_value('sphinx_gha_repo_root', os.getcwd(), 'env')
     app.setup_extension('myst_parser')
