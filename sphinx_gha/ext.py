@@ -87,7 +87,7 @@ class ActionsItemDirective(ObjectDescription[str], MarkdownParsingMixin):
         signode['ids'].append(node_id)
         self.state.document.note_explicit_target(signode)
 
-    def format_field (self, field_name: str, field_value: str):
+    def format_field(self, field_name: str, field_value: str):
         parsed, msgs = self.parse_inline(field_value, lineno=self.lineno)
         field = nodes.field(
             '',
@@ -110,6 +110,7 @@ class ActionsItemDirective(ObjectDescription[str], MarkdownParsingMixin):
         if description := self.options.get('description'):
             self.parse_markdown(description, inline=False, node=content_node)
 
+
 class ActionInputDirective(ActionsItemDirective):
     fields = ['required', 'type', 'default']
     option_spec = {'deprecationMessage': directives.unchanged_required}
@@ -118,7 +119,7 @@ class ActionInputDirective(ActionsItemDirective):
         admonition = nodes.admonition()
         admonition['classes'].append('warning')
         title_text = 'Deprecated'
-        textnodes, msg= self.state.inline_text(title_text, self.lineno)
+        textnodes, msg = self.state.inline_text(title_text, self.lineno)
         title = nodes.title(title_text, '', *textnodes)
         title.source, title.line = (
             self.state_machine.get_source_and_line(self.lineno))
@@ -137,19 +138,37 @@ class ActionInputDirective(ActionsItemDirective):
             admonition, msgs = self.format_deprecationMessage(deprecation_message)
             content_node.insert(0, admonition)
 
+
 class ActionOutputDirective(ActionsItemDirective):
     pass
+
 
 class ActionDirective(SphinxDirective, MarkdownParsingMixin):
     has_content = True
     required_arguments = 0
+    optional_arguments = 1
     option_spec = {
         'path': directives.unchanged_required,
     }
 
     def run(self):
 
-        action_path = Path(self.options['path'])
+        action_path = self.options.get('path')
+
+        if action_path:
+            action_path = Path(self.env.config['sphinx_gha_repo_root']) / action_path
+            for extension in ['yml', 'yaml']:
+                test_path = Path(str(action_path) + '.' + extension)
+                if test_path.exists():
+                    action_path = test_path
+
+        if len(self.arguments) > 0:
+            action_name = self.arguments[0]
+        elif action_path := self.options['path'] and action_path:
+            action_name = Path(action_path).parent.name
+        else:
+            self.error('Neither a path nor an action name provided!')
+
         domain_name = self.name.split(':')[0]
         domain_obj = self.env.domains[domain_name]
 
@@ -168,6 +187,8 @@ class ActionDirective(SphinxDirective, MarkdownParsingMixin):
         if 'description' in action_yaml:
             section.extend(self.parse_markdown(action_yaml['description']))
 
+        section.extend(self.parse_content_to_nodes())
+
         item_lists = [
             ('inputs', 'Inputs', 'action-input'),
             ('outputs', 'Outputs', 'action-output'),
@@ -179,13 +200,14 @@ class ActionDirective(SphinxDirective, MarkdownParsingMixin):
                 item_list_section = nodes.section(
                     '',
                     nodes.rubric(text=title),
-                    ids=[nodes.make_id(action_path.parent.name + '_' + title)],
+                    ids=[nodes.make_id(action_name + '_' + title)],
                     names=[nodes.fully_normalize_name(title)],
                 )
                 for item_name, item_meta in item_list.items():
                     if item_meta is None:
                         item_meta = {}
-                    item_list_section.extend(domain_obj.directive(directive).generate(item_name, item_meta, self.lineno, self.content_offset, self.state, self.state_machine))
+                    item_list_section.extend(
+                        domain_obj.directive(directive).generate(item_name, item_meta, self.lineno, self.content_offset, self.state, self.state_machine))
                 section.append(item_list_section)
         return [section]
 
@@ -207,7 +229,7 @@ class GHActionsDomain(Domain):
     }
 
     object_types = {
-        'action-input': ObjType('action-input' )
+        'action-input': ObjType('action-input')
     }
 
     def get_full_qualified_name(self, node):

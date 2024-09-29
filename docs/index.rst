@@ -12,4 +12,4 @@ documentation for details.
 
 
 .. gh-actions:action::
-    :path: /Users/drewcassidy/Code/yaclog/action.yaml
+    :path: .github/actions/cowsay/action

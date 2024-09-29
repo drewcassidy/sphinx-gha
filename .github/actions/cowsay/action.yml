@@ -1,0 +1,51 @@
+name: Cowsay
+description: |
+  configurable speaking/thinking cow (and a bit more)
+  
+  Generates an ASCII picture of a cow saying something provided by the user.
+
+branding:
+  icon: message-circle
+  color: green
+
+x-example-name: 'Make bunny say moo'
+x-env:
+  COWPATH:
+    description: if present, path used to search for cowfiles.
+
+inputs:
+  message:
+    description: "What the cow should say"
+    required: True
+    x-example: 'moo'
+
+  cowfile:
+    description: cowfile to use. Must be present in `COWPATH`
+    default: 'default'
+    x-example: 'bunny'
+
+  dead:
+    description: causes the cow should appear dead
+    default: 'False'
+
+outputs:
+  stdout:
+    description: "Cowsay output"
+    value: ${{ steps.cowsay.outputs.stdout}}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Cowsay
+      shell: bash
+      run: |
+        sudo apt update
+        sudo apt install cowsay
+
+    - name: Run Cowsay
+      shell: bash
+      id: cowsay
+      run: > 
+        echo "stdout=$(cowsay -f ${{ inputs.cowfile }} ${{ inputs.dead && '-d' }} ${{inputs.message}})" 
+        | tee >> "$GITHUB_OUTPUT"
+
