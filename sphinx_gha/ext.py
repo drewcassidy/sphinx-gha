@@ -148,6 +148,7 @@ class ActionOutputDirective(ActionsItemDirective):
 
 class ActionDirective(SphinxDirective, MarkdownParsingMixin):
     has_content = True
+    final_argument_whitespace = True
     required_arguments = 0
     optional_arguments = 1
     option_spec = {
