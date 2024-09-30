@@ -15,4 +15,4 @@ documentation for details.
    :caption: Contents:
 
 .. gh-actions:action::
-    :path: .github/actions/cowsay/action
+    :path: .github/actions/cowsay

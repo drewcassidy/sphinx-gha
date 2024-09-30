@@ -208,8 +208,8 @@ class ActionDirective(SphinxDirective, MarkdownParsingMixin):
 
         if self.action_path:
             action_path = Path(self.env.config['sphinx_gha_repo_root']) / self.action_path
-            for extension in ['yml', 'yaml']:
-                test_path = Path(str(action_path) + '.' + extension)
+            for filename in ['action.yml', 'action.yaml']:
+                test_path = action_path / filename
                 if test_path.exists():
                     self.action_path = test_path
 
