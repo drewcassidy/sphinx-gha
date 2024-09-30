@@ -115,7 +115,7 @@ class ActionsItemDirective(ObjectDescription[str], MarkdownParsingMixin):
 
 
 class ActionInputDirective(ActionsItemDirective):
-    fields = ['required', 'type', 'default']
+    fields = ['required', 'default']
     option_spec = {'deprecationMessage': directives.unchanged_required}
 
     def format_deprecationMessage(self, message):
