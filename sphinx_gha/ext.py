@@ -2,7 +2,6 @@ import os
 import typing as ty
 from pathlib import Path
 from typing import Iterable
-from collections import OrderedDict
 
 import sphinx
 import yaml
@@ -89,12 +88,14 @@ class ActionsItemDirective(ObjectDescription[str], MarkdownParsingMixin):
         signode['ids'].append(node_id)
         self.state.document.note_explicit_target(signode)
 
-    def format_field(self, field_name: str, field_value: str):
+    def format_field(self, field_name: str, field_value):
+
         parsed, msgs = self.parse_inline(field_value, lineno=self.lineno)
+        value = nodes.literal('', field_value,)
         field = nodes.field(
             '',
             nodes.field_name('', field_name.title()),
-            nodes.field_body('', *parsed),
+            nodes.field_body('', value),
         )
         return field, msgs
 
@@ -197,7 +198,6 @@ class ActionDirective(SphinxDirective, MarkdownParsingMixin):
         if env:
             example_yaml['env'] = env
 
-
         example_yaml = [example_yaml]
         return yaml.dump(example_yaml, Dumper=SafeDumper, sort_keys=False)
 
@@ -211,7 +211,6 @@ class ActionDirective(SphinxDirective, MarkdownParsingMixin):
                 test_path = Path(str(action_path) + '.' + extension)
                 if test_path.exists():
                     self.action_path = test_path
-
 
         if self.action_path:
             with open(self.action_path, 'rt') as stream:
@@ -234,7 +233,6 @@ class ActionDirective(SphinxDirective, MarkdownParsingMixin):
         domain_name = self.name.split(':')[0]
         domain_obj = self.env.domains[domain_name]
 
-
         # Title
 
         section: nodes.Element = nodes.section(
@@ -253,16 +251,16 @@ class ActionDirective(SphinxDirective, MarkdownParsingMixin):
 
         # Example code
 
-
         if example_yaml := self.example():
             code_section = nodes.section(
                 '',
                 nodes.rubric(text='Example'),
-                ids=[nodes.make_id(self.action_name + '_example' )],
+                ids=[nodes.make_id(self.action_name + '_example')],
                 names=[nodes.fully_normalize_name('example')],
             )
 
-            code = Code('Code', ['yaml'], {}, content = example_yaml.splitlines(), lineno=self.lineno, content_offset=self.content_offset, block_text='', state=self.state, state_machine=self.state_machine)
+            code = Code('Code', ['yaml'], {}, content=example_yaml.splitlines(), lineno=self.lineno, content_offset=self.content_offset, block_text='',
+                        state=self.state, state_machine=self.state_machine)
             code_section.extend(code.run())
             section.append(code_section)
 
