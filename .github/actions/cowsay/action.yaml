@@ -46,7 +46,7 @@ runs:
     - name: Run Cowsay
       shell: bash
       id: cowsay
-      run: > 
-        echo "stdout=$(cowsay -f ${{ inputs.cowfile }} ${{ inputs.dead && '-d' }} ${{inputs.message}})" 
-        | tee >> "$GITHUB_OUTPUT"
-
+      run: >
+        echo "stdout<<EOC" >> "$GITHUB_OUTPUT"
+        cowsay -f ${{ inputs.cowfile }} ${{ inputs.dead && '-d' }} ${{inputs.message}} | tee >> "$GITHUB_OUTPUT"
+        echo "EOC" >> "$GITHUB_OUTPUT"
