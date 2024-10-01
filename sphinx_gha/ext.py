@@ -11,9 +11,9 @@ from docutils.parsers.rst import directives, Directive
 from myst_parser.mdit_to_docutils.base import DocutilsRenderer
 from myst_parser.mdit_to_docutils.sphinx_ import SphinxRenderer
 from myst_parser.parsers.mdit import create_md_parser
-from sphinx import application
-from sphinx.addnodes import desc_name
-from sphinx.directives import ObjectDescription
+from sphinx import application, addnodes
+from sphinx.addnodes import desc_name, desc_signature, desc
+from sphinx.directives import ObjectDescription, ObjDescT
 from sphinx.directives.patches import Code
 from sphinx.domains import Domain, ObjType
 from sphinx.roles import XRefRole
@@ -91,7 +91,7 @@ class ActionsItemDirective(ObjectDescription[str], MarkdownParsingMixin):
     def format_field(self, field_name: str, field_value):
 
         parsed, msgs = self.parse_inline(field_value, lineno=self.lineno)
-        value = nodes.literal('', field_value,)
+        value = nodes.literal('', field_value, )
         field = nodes.field(
             '',
             nodes.field_name('', field_name.title()),
@@ -146,7 +146,7 @@ class ActionOutputDirective(ActionsItemDirective):
     pass
 
 
-class ActionDirective(SphinxDirective, MarkdownParsingMixin):
+class ActionDirective(ObjectDescription, MarkdownParsingMixin):
     has_content = True
     final_argument_whitespace = True
     required_arguments = 0
@@ -202,8 +202,14 @@ class ActionDirective(SphinxDirective, MarkdownParsingMixin):
         example_yaml = [example_yaml]
         return yaml.dump(example_yaml, Dumper=SafeDumper, sort_keys=False)
 
-    def run(self):
+    def handle_signature(self, sig: str, sig_node: desc_signature) -> ObjDescT:
+        sig_node.clear()
+        sig_node += desc_name(sig, sig)
+        name = ws_re.sub(' ', sig)
+        sig_node['fullname'] = sig
+        return name
 
+    def get_signatures(self) -> list[str]:
         self.action_path = self.options.get('path')
 
         if self.action_path:
@@ -231,24 +237,28 @@ class ActionDirective(SphinxDirective, MarkdownParsingMixin):
 
         self.action_id = Path(self.action_path).parent.name if self.action_path else self.action_name
 
+        return [self.action_name]
+
+    def _object_hierarchy_parts(self, sig_node) -> tuple[str, ...]:
+        return (sig_node['fullname'],)
+
+    def _toc_entry_name(self, sig_node) -> str:
+        if not sig_node.get('_toc_parts'):
+            return ''
+        name, = sig_node['_toc_parts']
+        return name
+
+    def add_target_and_index(self, name: str, sig: str, signode) -> None:
+        node_id = sphinx.util.nodes.make_id(self.env, self.state.document, self.objtype, name)
+        signode['ids'].append(node_id)
+        self.state.document.note_explicit_target(signode)
+
+    def transform_content(self, content_node: addnodes.desc_content) -> None:
         domain_name = self.name.split(':')[0]
         domain_obj = self.env.domains[domain_name]
 
-        # Title
-
-        section: nodes.Element = nodes.section(
-            '',
-            nodes.title(text=self.action_name),
-            ids=[nodes.make_id(self.action_id)],
-            names=[nodes.fully_normalize_name(self.action_id)],
-        )
-
-        # Description
-
         if description := self.action_yaml.get('description'):
-            section.extend(self.parse_markdown(description))
-
-        section.extend(self.parse_content_to_nodes())
+            content_node.extend(self.parse_markdown(description))
 
         # Example code
 
@@ -263,7 +273,7 @@ class ActionDirective(SphinxDirective, MarkdownParsingMixin):
             code = Code('Code', ['yaml'], {}, content=example_yaml.splitlines(), lineno=self.lineno, content_offset=self.content_offset, block_text='',
                         state=self.state, state_machine=self.state_machine)
             code_section.extend(code.run())
-            section.append(code_section)
+            content_node.append(code_section)
 
         # Items
 
@@ -286,8 +296,7 @@ class ActionDirective(SphinxDirective, MarkdownParsingMixin):
                         item_meta = {}
                     item_list_section.extend(
                         domain_obj.directive(directive).generate(item_name, item_meta, self.lineno, self.content_offset, self.state, self.state_machine))
-                section.append(item_list_section)
-        return [section]
+                content_node.append(item_list_section)
 
 
 class GHActionsDomain(Domain):
