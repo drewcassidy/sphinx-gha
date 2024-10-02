@@ -6,7 +6,7 @@ from typing import Iterable
 import sphinx
 import yaml
 from docutils import nodes
-from docutils.nodes import Element
+from docutils.nodes import Element, Node
 from docutils.parsers.rst import directives, Directive
 from myst_parser.mdit_to_docutils.base import DocutilsRenderer
 from myst_parser.mdit_to_docutils.sphinx_ import SphinxRenderer
@@ -16,10 +16,11 @@ from sphinx.addnodes import desc_name, desc_signature, desc
 from sphinx.directives import ObjectDescription, ObjDescT
 from sphinx.directives.patches import Code
 from sphinx.domains import Domain, ObjType
+from sphinx.domains.std import StandardDomain
 from sphinx.roles import XRefRole
 from sphinx.util import ws_re
 from sphinx.util.docutils import SphinxDirective
-from sphinx.util.nodes import make_refnode
+from sphinx.util.nodes import make_refnode, make_id
 
 try:
     from yaml import CLoader as Loader, CDumper as Dumper, SafeDumper
@@ -50,6 +51,7 @@ class MarkdownParsingMixin(Directive):
 
 
 class ActionsItemDirective(ObjectDescription[str], MarkdownParsingMixin):
+    parent_role = ''
     index_template: str = '%s'
     fields = []
     option_spec = {'description': directives.unchanged_required}
@@ -68,20 +70,24 @@ class ActionsItemDirective(ObjectDescription[str], MarkdownParsingMixin):
         return node
 
     def handle_signature(self, sig: str, sig_node) -> str:
+        parent = self.env.ref_context.get(self.parent_role)
+        name = ws_re.sub(' ', sig)
+
         sig_node.clear()
         sig_node += desc_name(sig, sig)
-        name = ws_re.sub(' ', sig)
-        sig_node['fullname'] = sig
+        sig_node['name'] = sig
+        if parent:
+            sig_node['parent'] = parent
+            sig_node['fullname'] = parent + '.' + sig
+        else:
+            sig_node['fullname'] = sig
         return name
 
     def _object_hierarchy_parts(self, sig_node) -> tuple[str, ...]:
-        return (sig_node['fullname'],)
+        return tuple(sig_node['fullname'].split('.'))
 
     def _toc_entry_name(self, sig_node) -> str:
-        if not sig_node.get('_toc_parts'):
-            return ''
-        name, = sig_node['_toc_parts']
-        return name
+        return sig_node['name']
 
     def add_target_and_index(self, name: str, sig: str, signode) -> None:
         node_id = sphinx.util.nodes.make_id(self.env, self.state.document, self.objtype, name)
@@ -115,6 +121,7 @@ class ActionsItemDirective(ObjectDescription[str], MarkdownParsingMixin):
 
 
 class ActionInputDirective(ActionsItemDirective):
+    parent_role = 'gh-actions:action'
     fields = ['required', 'default']
     option_spec = {'deprecationMessage': directives.unchanged_required}
 
@@ -143,7 +150,22 @@ class ActionInputDirective(ActionsItemDirective):
 
 
 class ActionOutputDirective(ActionsItemDirective):
-    pass
+    parent_role = 'gh-actions:action'
+
+
+class ActionEnvDirective(ActionsItemDirective):
+    parent_role = 'gh-actions:action'
+    fields = ['required']
+
+    def add_target_and_index(self, name: str, sig: str, signode) -> None:
+        super().add_target_and_index(name, sig, signode)
+        objtype = 'envvar'
+        node_id = make_id(self.env, self.state.document, objtype, name)
+        signode['ids'].append(node_id)
+        self.state.document.note_explicit_target(signode)
+
+        std: StandardDomain = self.env.domains['std']
+        std.note_object(objtype, signode['fullname'], node_id, location=signode)
 
 
 class ActionDirective(ObjectDescription, MarkdownParsingMixin):
@@ -203,6 +225,7 @@ class ActionDirective(ObjectDescription, MarkdownParsingMixin):
         return yaml.dump(example_yaml, Dumper=SafeDumper, sort_keys=False)
 
     def handle_signature(self, sig: str, sig_node: desc_signature) -> ObjDescT:
+        self.env.ref_context['gh-actions:action'] = self.action_id
         sig_node.clear()
         sig_prefix = [nodes.Text('action'), addnodes.desc_sig_space()]
         sig_node += addnodes.desc_annotation(str(sig_prefix), '', *sig_prefix)
@@ -212,33 +235,6 @@ class ActionDirective(ObjectDescription, MarkdownParsingMixin):
         return name
 
     def get_signatures(self) -> list[str]:
-        self.action_path = self.options.get('path')
-
-        if self.action_path:
-            action_path = Path(self.env.config['sphinx_gha_repo_root']) / self.action_path
-            for filename in ['action.yml', 'action.yaml']:
-                test_path = action_path / filename
-                if test_path.exists():
-                    self.action_path = test_path
-
-        if self.action_path:
-            with open(self.action_path, 'rt') as stream:
-                self.action_yaml = yaml.full_load(stream)
-        else:
-            self.action_yaml = {}
-
-        self.action_name = None
-        if len(self.arguments) > 0:
-            self.action_name = self.arguments[0]
-        elif 'name' in self.action_yaml:
-            self.action_name = self.action_yaml['name']
-        elif self.action_path:
-            self.action_name = Path(self.action_path).parent.name
-        else:
-            self.error('Neither a path nor an action name provided!')
-
-        self.action_id = Path(self.action_path).parent.name if self.action_path else self.action_name
-
         return [self.action_id]
 
     def _object_hierarchy_parts(self, sig_node) -> tuple[str, ...]:
@@ -282,7 +278,7 @@ class ActionDirective(ObjectDescription, MarkdownParsingMixin):
         item_lists = [
             ('inputs', 'Inputs', 'action-input'),
             ('outputs', 'Outputs', 'action-output'),
-            ('x-env', 'Environment Variables', 'action-input')
+            ('x-env', 'Environment Variables', 'envvar')
         ]
 
         for (key, title, directive) in item_lists:
@@ -300,6 +296,32 @@ class ActionDirective(ObjectDescription, MarkdownParsingMixin):
                         domain_obj.directive(directive).generate(item_name, item_meta, self.lineno, self.content_offset, self.state, self.state_machine))
                 content_node.append(item_list_section)
 
+    def run(self):
+        self.action_path = self.options.get('path')
+
+        if self.action_path:
+            action_path = Path(self.env.config['sphinx_gha_repo_root']) / self.action_path
+            for filename in ['action.yml', 'action.yaml']:
+                test_path = action_path / filename
+                if test_path.exists():
+                    self.action_path = test_path
+
+        if self.action_path:
+            with open(self.action_path, 'rt') as stream:
+                self.action_yaml = yaml.full_load(stream)
+        else:
+            self.action_yaml = {}
+
+        self.action_id = 'unknown-action'
+        if len(self.arguments) > 0:
+            self.action_id = self.arguments[0]
+        elif self.action_path:
+            self.action_id = Path(self.action_path).parent.name
+        else:
+            self.error('Neither a path nor an action name provided!')
+
+        return super().run()
+
 
 class GHActionsDomain(Domain):
     name = 'gh-actions'
@@ -311,6 +333,7 @@ class GHActionsDomain(Domain):
         'action': ActionDirective,
         'action-input': ActionInputDirective,
         'action-output': ActionOutputDirective,
+        'envvar': ActionEnvDirective,
     }
 
     initial_data = {
