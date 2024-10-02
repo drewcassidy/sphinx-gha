@@ -204,6 +204,8 @@ class ActionDirective(ObjectDescription, MarkdownParsingMixin):
 
     def handle_signature(self, sig: str, sig_node: desc_signature) -> ObjDescT:
         sig_node.clear()
+        sig_prefix = [nodes.Text('action'), addnodes.desc_sig_space()]
+        sig_node += addnodes.desc_annotation(str(sig_prefix), '', *sig_prefix)
         sig_node += desc_name(sig, sig)
         name = ws_re.sub(' ', sig)
         sig_node['fullname'] = sig
@@ -237,7 +239,7 @@ class ActionDirective(ObjectDescription, MarkdownParsingMixin):
 
         self.action_id = Path(self.action_path).parent.name if self.action_path else self.action_name
 
-        return [self.action_name]
+        return [self.action_id]
 
     def _object_hierarchy_parts(self, sig_node) -> tuple[str, ...]:
         return (sig_node['fullname'],)
@@ -266,7 +268,7 @@ class ActionDirective(ObjectDescription, MarkdownParsingMixin):
             code_section = nodes.section(
                 '',
                 nodes.rubric(text='Example'),
-                ids=[nodes.make_id(self.action_name + '_example')],
+                ids=[nodes.make_id(self.action_id + '_example')],
                 names=[nodes.fully_normalize_name('example')],
             )
 
