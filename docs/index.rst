@@ -16,3 +16,5 @@ documentation for details.
 
 .. gh-actions:action::
     :path: .github/actions/cowsay
+
+The cow should never be `dead`

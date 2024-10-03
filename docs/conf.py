@@ -15,6 +15,7 @@ author = 'Andrew Cassidy'
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
 extensions = ['sphinx_gha', 'myst_parser']
+default_role = 'any'
 
 templates_path = ['_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']

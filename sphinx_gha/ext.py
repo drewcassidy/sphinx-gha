@@ -1,6 +1,10 @@
+from __future__ import annotations
+
+import logging
 import os
 import typing as ty
 from pathlib import Path
+from pydoc import parentname
 from typing import Iterable
 
 import sphinx
@@ -12,20 +16,24 @@ from myst_parser.mdit_to_docutils.base import DocutilsRenderer
 from myst_parser.mdit_to_docutils.sphinx_ import SphinxRenderer
 from myst_parser.parsers.mdit import create_md_parser
 from sphinx import application, addnodes
-from sphinx.addnodes import desc_name, desc_signature, desc
+from sphinx.addnodes import desc_name, desc_signature, desc, pending_xref
+from sphinx.builders import Builder
 from sphinx.directives import ObjectDescription, ObjDescT
 from sphinx.directives.patches import Code
 from sphinx.domains import Domain, ObjType
 from sphinx.domains.std import StandardDomain
+from sphinx.environment import BuildEnvironment
 from sphinx.roles import XRefRole
 from sphinx.util import ws_re
 from sphinx.util.docutils import SphinxDirective
-from sphinx.util.nodes import make_refnode, make_id
+from sphinx.util.nodes import make_refnode, make_id, find_pending_xref_condition
 
 try:
     from yaml import CLoader as Loader, CDumper as Dumper, SafeDumper
 except ImportError:
     from yaml import Loader, Dumper
+
+logger = logging.getLogger(__name__)
 
 
 def indent(text: str, level=1):
@@ -89,13 +97,15 @@ class ActionsItemDirective(ObjectDescription[str], MarkdownParsingMixin):
     def _toc_entry_name(self, sig_node) -> str:
         return sig_node['name']
 
-    def add_target_and_index(self, name: str, sig: str, signode) -> None:
+    def add_target_and_index(self, name: str, sig: str, sig_node) -> None:
         node_id = sphinx.util.nodes.make_id(self.env, self.state.document, self.objtype, name)
-        signode['ids'].append(node_id)
-        self.state.document.note_explicit_target(signode)
+        sig_node['ids'].append(node_id)
+        self.state.document.note_explicit_target(sig_node)
+
+        domain = self.env.domains['gh-actions']
+        domain.note_object(sig_node['fullname'], sig_node['name'], self.objtype, node_id)
 
     def format_field(self, field_name: str, field_value):
-
         parsed, msgs = self.parse_inline(field_value, lineno=self.lineno)
         value = nodes.literal('', field_value, )
         field = nodes.field(
@@ -162,11 +172,9 @@ class ActionEnvDirective(ActionsItemDirective):
         objtype = 'envvar'
         node_id = make_id(self.env, self.state.document, objtype, name)
         signode['ids'].append(node_id)
-        self.state.document.note_explicit_target(signode)
 
         std: StandardDomain = self.env.domains['std']
         std.note_object(objtype, signode['fullname'], node_id, location=signode)
-
 
 class ActionDirective(ObjectDescription, MarkdownParsingMixin):
     has_content = True
@@ -278,7 +286,7 @@ class ActionDirective(ObjectDescription, MarkdownParsingMixin):
         item_lists = [
             ('inputs', 'Inputs', 'action-input'),
             ('outputs', 'Outputs', 'action-output'),
-            ('x-env', 'Environment Variables', 'envvar')
+            ('x-env', 'Environment Variables', 'action-envvar')
         ]
 
         for (key, title, directive) in item_lists:
@@ -326,53 +334,88 @@ class ActionDirective(ObjectDescription, MarkdownParsingMixin):
 class GHActionsDomain(Domain):
     name = 'gh-actions'
     label = 'Github Actions'
-    roles = {
-        'action': XRefRole(),
-    }
     directives = {
         'action': ActionDirective,
         'action-input': ActionInputDirective,
         'action-output': ActionOutputDirective,
-        'envvar': ActionEnvDirective,
+        'action-envvar': ActionEnvDirective,
     }
+    roles = {directive: XRefRole() for directive in directives}
+    object_types = {role: ObjType(role) for role in roles.keys()}
 
     initial_data = {
-        'actions': []
-    }
-
-    object_types = {
-        'action-input': ObjType('action-input')
+        'objects': {}
     }
 
     def get_full_qualified_name(self, node):
-        return f'gh-actions.{node.arguments[0]}'
+        parent_name = node.get('gh-actions:action') or node.get('gh-actions:workflow')
+        target = node.get('reftarget')
+        if target is None:
+            return None
+        else:
+            return '.'.join(filter(None, [parent_name, target]))
 
     def get_objects(self) -> Iterable[tuple[str, str, str, str, str, int]]:
-        yield from self.data['actions']
+        yield from [tuple([name, *obj]) for name, obj in self.data['objects'].items()]
 
-    def resolve_xref(self, env, fromdocname, builder, typ, target, node, contnode):
-        match = [
-            (docname, anchor) for name, sig, typ, docname, anchor, prio in self.get_objects() if sig == target
+    def find_obj(self, env: BuildEnvironment, modname: str, classname: str,
+                 name: str, type: str | None, searchmode: int = 0, ) -> list[tuple[str,]]:
+        pass
+
+    def resolve_xref(self, env: BuildEnvironment, fromdocname: str, builder: Builder,
+                     typ: str, target: str, node: pending_xref, contnode: Element,
+                     ) -> Element | None:
+        typ_name = typ.split(':')[-1]
+        if len(target.split('.')) == 1:
+            if typ_name.startswith('action'):
+                parent_name = node.get('gh-actions:action')
+            elif typ_name.startswith('workflow'):
+                parent_name = node.get('gh-actions:workflow')
+            else:
+                parent_name = None
+            target = '.'.join(filter(None, [parent_name, target]))
+
+        matches = [
+            (docname, anchor) for name, displane, objtyp, docname, anchor, prio in self.get_objects() if name == target and objtyp == typ
         ]
 
-        if len(match) > 0:
-            todocname = match[0][0]
-            targ = match[0][1]
-
-            return make_refnode(builder, fromdocname, todocname, targ, contnode, targ)
-
-        else:
-            print('Awww, found nothing')
+        if not matches:
             return None
 
-    def add_action(self, signature, full_name):
-        """Add a new action to the domain"""
-        name = f'action.{signature}'
-        anchor = f'action-{signature}'
+        if len(matches) > 1:
+            logger.warning('more than one target found for cross-reference %r: %s',
+                           target, ', '.join(match[0] for match in matches))
 
-        self.data['actions'].append((
-            name, full_name, 'gh-action', self.env.docname, anchor, 0
-        ))
+        docname, anchor = matches[0]
+
+        # determine the content of the reference by conditions
+        content = find_pending_xref_condition(node, 'resolved')
+        if content:
+            children = content.children
+        else:
+            # if not found, use contnode
+            children = [contnode]
+
+        return make_refnode(builder, fromdocname, docname, anchor, children, docname)
+
+    def resolve_any_xref(self, env: BuildEnvironment, fromdocname: str, builder: Builder,
+                         target: str, node: pending_xref, contnode: Element,
+                         ) -> list[tuple[str, Element]]:
+        matches = []
+        for typ in self.object_types.keys():
+            match = self.resolve_xref(env, fromdocname, builder, typ, target, node, contnode)
+            if match is not None:
+                matches.append((typ, match))
+        return matches
+
+    def note_object(self, name: str, dispname: str, typ: str, anchor: str) -> None:
+        """Note a python object for cross reference. """
+        if other := self.data['objects'].get(name):
+            logger.warning('duplicate object description of %s, '
+                           'other instance in %s, use :no-index: for one of them',
+                           name, other.docname)
+        else:
+            self.data['objects'][name] = (dispname, typ, self.env.docname, anchor, 1)
 
 
 def setup(app: application.Sphinx) -> ty.Dict[str, ty.Any]:
