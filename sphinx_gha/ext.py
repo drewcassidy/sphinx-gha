@@ -4,19 +4,18 @@ import logging
 import os
 import typing as ty
 from pathlib import Path
-from pydoc import parentname
 from typing import Iterable
 
 import sphinx
 import yaml
 from docutils import nodes
-from docutils.nodes import Element, Node
+from docutils.nodes import Element
 from docutils.parsers.rst import directives, Directive
 from myst_parser.mdit_to_docutils.base import DocutilsRenderer
 from myst_parser.mdit_to_docutils.sphinx_ import SphinxRenderer
 from myst_parser.parsers.mdit import create_md_parser
 from sphinx import application, addnodes
-from sphinx.addnodes import desc_name, desc_signature, desc, pending_xref
+from sphinx.addnodes import desc_name, desc_signature, pending_xref
 from sphinx.builders import Builder
 from sphinx.directives import ObjectDescription, ObjDescT
 from sphinx.directives.patches import Code
@@ -25,13 +24,12 @@ from sphinx.domains.std import StandardDomain
 from sphinx.environment import BuildEnvironment
 from sphinx.roles import XRefRole
 from sphinx.util import ws_re
-from sphinx.util.docutils import SphinxDirective
 from sphinx.util.nodes import make_refnode, make_id, find_pending_xref_condition
 
 try:
     from yaml import CLoader as Loader, CDumper as Dumper, SafeDumper
 except ImportError:
-    from yaml import Loader, Dumper
+    from yaml import Loader, Dumper, SafeDumper
 
 logger = logging.getLogger(__name__)
 
@@ -367,17 +365,19 @@ class GHActionsDomain(Domain):
                      typ: str, target: str, node: pending_xref, contnode: Element,
                      ) -> Element | None:
         typ_name = typ.split(':')[-1]
+        dispname = target
         if len(target.split('.')) == 1:
-            if typ_name.startswith('action'):
+            # figure out the parent object from the current context
+            if typ_name.startswith('action-'):
                 parent_name = node.get('gh-actions:action')
-            elif typ_name.startswith('workflow'):
+            elif typ_name.startswith('workflow-'):
                 parent_name = node.get('gh-actions:workflow')
             else:
                 parent_name = None
-            target = '.'.join(filter(None, [parent_name, target]))
+            target = '.'.join(filter(None, [parent_name, target])) # extend target full name with parent
 
         matches = [
-            (docname, anchor) for name, displane, objtyp, docname, anchor, prio in self.get_objects() if name == target and objtyp == typ
+            (docname, anchor) for name, dispname, objtyp, docname, anchor, prio in self.get_objects() if name == target and objtyp == typ
         ]
 
         if not matches:
@@ -397,7 +397,7 @@ class GHActionsDomain(Domain):
             # if not found, use contnode
             children = [contnode]
 
-        return make_refnode(builder, fromdocname, docname, anchor, children, docname)
+        return make_refnode(builder, fromdocname, docname, anchor, children, title=dispname)
 
     def resolve_any_xref(self, env: BuildEnvironment, fromdocname: str, builder: Builder,
                          target: str, node: pending_xref, contnode: Element,
