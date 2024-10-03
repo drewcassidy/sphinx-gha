@@ -176,6 +176,7 @@ class ActionEnvDirective(ActionsItemDirective):
         std: StandardDomain = self.env.domains['std']
         std.note_object(objtype, signode['fullname'], node_id, location=signode)
 
+
 class ActionDirective(ObjectDescription, MarkdownParsingMixin):
     has_content = True
     final_argument_whitespace = True
@@ -344,7 +345,7 @@ class GHActionsDomain(Domain):
     object_types = {role: ObjType(role) for role in roles.keys()}
 
     initial_data = {
-        'objects': {}
+        'objects': []
     }
 
     def get_full_qualified_name(self, node):
@@ -356,7 +357,7 @@ class GHActionsDomain(Domain):
             return '.'.join(filter(None, [parent_name, target]))
 
     def get_objects(self) -> Iterable[tuple[str, str, str, str, str, int]]:
-        yield from [tuple([name, *obj]) for name, obj in self.data['objects'].items()]
+        yield from self.data['objects']
 
     def find_obj(self, env: BuildEnvironment, modname: str, classname: str,
                  name: str, type: str | None, searchmode: int = 0, ) -> list[tuple[str,]]:
@@ -410,12 +411,7 @@ class GHActionsDomain(Domain):
 
     def note_object(self, name: str, dispname: str, typ: str, anchor: str) -> None:
         """Note a python object for cross reference. """
-        if other := self.data['objects'].get(name):
-            logger.warning('duplicate object description of %s, '
-                           'other instance in %s, use :no-index: for one of them',
-                           name, other.docname)
-        else:
-            self.data['objects'][name] = (dispname, typ, self.env.docname, anchor, 1)
+        self.data['objects'].append((name, dispname, typ, self.env.docname, anchor, 1))
 
 
 def setup(app: application.Sphinx) -> ty.Dict[str, ty.Any]:
