@@ -37,6 +37,6 @@ jobs:
           echo "owed=$(bc -l -e '(${{inputs.income}} * ${{env.TAX_RATE}} / 100) - ${{inputs.paid-taxes}}')" >> "$GITHUB_OUTPUT"
 
       - name: Cow Say
-        using: drewcassidy/sphinx-gha/.github/actions/cowsay@main
+        uses: drewcassidy/sphinx-gha/.github/actions/cowsay@main
         with:
           message: I have paid $${{ steps.calc.outputs.owed }} to the cow IRS

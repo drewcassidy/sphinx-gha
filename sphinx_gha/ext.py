@@ -222,7 +222,7 @@ class ActionDirective(ObjectDescription, MarkdownParsingMixin):
 
         if name:
             example_yaml['name'] = name
-        example_yaml['using'] = slug
+        example_yaml['uses'] = slug
         if inputs:
             example_yaml['with'] = inputs
         if env:
