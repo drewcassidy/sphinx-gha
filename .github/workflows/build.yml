@@ -22,7 +22,7 @@ jobs:
 
       - name: Build Test Docs
         run: |
-          python -m sphinx docs/ docs/_build -E -v
+          python -m sphinx docs/ docs/_build -E -W -v
 
       - name: Install pypa/build
         run: python -m pip install build --user
