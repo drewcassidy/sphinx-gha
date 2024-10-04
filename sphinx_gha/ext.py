@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import os
 import typing as ty
+from abc import abstractmethod
+from functools import cached_property
 from pathlib import Path
 from typing import Iterable
 
@@ -113,6 +115,23 @@ class ActionsItemDirective(ObjectDescription[str], MarkdownParsingMixin):
         )
         return field, msgs
 
+    def format_deprecationMessage(self, message):
+        admonition = nodes.admonition()
+        admonition['classes'].append('warning')
+        title_text = 'Deprecated'
+        textnodes, msg = self.state.inline_text(title_text, self.lineno)
+        title = nodes.title(title_text, '', *textnodes)
+        title.source, title.line = (
+            self.state_machine.get_source_and_line(self.lineno))
+
+        admonition += title
+        admonition += msg
+
+        admonition['type'] = 'deprecated'
+        admonition.document = self.state.document
+        self.parse_markdown(message, inline=True, node=admonition)
+        return admonition, []
+
     def transform_content(self, content_node) -> None:
         """Insert fields as a field list."""
         field_list = nodes.field_list()
@@ -132,23 +151,6 @@ class ActionInputDirective(ActionsItemDirective):
     parent_role = 'gh-actions:action'
     fields = ['required', 'default']
     option_spec = {'deprecationMessage': directives.unchanged_required}
-
-    def format_deprecationMessage(self, message):
-        admonition = nodes.admonition()
-        admonition['classes'].append('warning')
-        title_text = 'Deprecated'
-        textnodes, msg = self.state.inline_text(title_text, self.lineno)
-        title = nodes.title(title_text, '', *textnodes)
-        title.source, title.line = (
-            self.state_machine.get_source_and_line(self.lineno))
-
-        admonition += title
-        admonition += msg
-
-        admonition['type'] = 'deprecated'
-        admonition.document = self.state.document
-        self.parse_markdown(message, inline=True, node=admonition)
-        return admonition, []
 
     def transform_content(self, content_node) -> None:
         super().transform_content(content_node)
@@ -175,7 +177,9 @@ class ActionEnvDirective(ActionsItemDirective):
         std.note_object(objtype, signode['fullname'], node_id, location=signode)
 
 
-class ActionDirective(ObjectDescription, MarkdownParsingMixin):
+class ActionsFileDirective(ObjectDescription, MarkdownParsingMixin):
+    role = None
+    file_type = None
     has_content = True
     final_argument_whitespace = True
     required_arguments = 0
@@ -184,6 +188,91 @@ class ActionDirective(ObjectDescription, MarkdownParsingMixin):
         'path': directives.unchanged_required,
     }
 
+    @classmethod
+    def id_from_path(cls, path: Path):
+        assert (path is not None)
+        return path.stem
+
+    @cached_property
+    def id(self):
+        if len(self.arguments) > 0:
+            return self.arguments[0]
+        elif (path := self.path) is not None:
+            return self.id_from_path(path)
+        else:
+            self.error('Neither a path nor an action name provided!')
+
+    @cached_property
+    def path(self):
+        path = self.options.get('path')
+        return Path(path) if path is not None else None
+
+    @cached_property
+    def yaml(self):
+        path = self.path
+        if path is None:
+            return {}
+        with open(path, 'rt') as stream:
+            return yaml.full_load(stream)
+
+    @property
+    def domain_obj(self) -> GHActionsDomain:
+        domain_name = self.name.split(':')[0]
+        return self.env.domains[domain_name]
+
+    def get_signatures(self) -> list[str]:
+        return [self.id]
+
+    def handle_signature(self, sig: str, sig_node: desc_signature) -> ObjDescT:
+        self.env.ref_context[self.role] = self.id
+        sig_node.clear()
+        sig_prefix = [nodes.Text(self.file_type), addnodes.desc_sig_space()]
+        sig_node += addnodes.desc_annotation(str(sig_prefix), '', *sig_prefix)
+        sig_node += desc_name(sig, sig)
+        name = ws_re.sub(' ', sig)
+        sig_node['fullname'] = sig
+        sig_node['name'] = sig
+        return name
+
+    def _object_hierarchy_parts(self, sig_node) -> tuple[str, ...]:
+        return (self.id,)
+
+    def _toc_entry_name(self, sig_node) -> str:
+        if not sig_node.get('_toc_parts'):
+            return ''
+        name, = sig_node['_toc_parts']
+        return name
+
+    def add_target_and_index(self, name: str, sig: str, sig_node) -> None:
+        node_id = sphinx.util.nodes.make_id(self.env, self.state.document, self.objtype, name)
+        sig_node['ids'].append(node_id)
+        self.state.document.note_explicit_target(sig_node)
+        self.domain_obj.note_object(sig_node['fullname'], sig_node['name'], self.objtype, node_id)
+
+
+class ActionDirective(ActionsFileDirective):
+    role = 'gh-actions:action'
+    file_type = 'action'
+
+    @cached_property
+    def path(self):
+        path = self.options.get('path')
+        if path is None:
+            return None
+        path = Path(path)
+        for filename in ['action.yml', 'action.yaml']:
+            test_path = path / filename
+            if test_path.exists():
+                return test_path
+        if path.is_file():
+            return path
+
+        self.error(f'Could not find an action definition at {path}')
+
+    @classmethod
+    def id_from_path(cls, path: Path):
+        return path.parent.name
+
     def example(self):
         if example_yaml := self.options.get('x-example'):
             return example_yaml
@@ -191,9 +280,8 @@ class ActionDirective(ObjectDescription, MarkdownParsingMixin):
         slug = self.env.config['sphinx_gha_repo_slug']
         if slug is None:
             self.error("No repo slug provided. please set the sphinx_gha_repo_slug config variable")
-        action_path = Path(self.action_path).parent
-        repo_root = self.env.config['sphinx_gha_repo_root'] or os.getcwd()
-        repo_root = Path(repo_root)
+        action_path = self.path.parent.absolute()
+        repo_root = Path(self.env.config['sphinx_gha_repo_root'] or os.getcwd()).absolute()
         relative_path = str(action_path.relative_to(repo_root))
 
         if relative_path != '.':
@@ -204,15 +292,15 @@ class ActionDirective(ObjectDescription, MarkdownParsingMixin):
         if action_ref:
             slug = slug + '@' + action_ref
 
-        name = self.action_yaml.get('x-example-name')
-        inputs = self.action_yaml.get('x_example_inputs') or {}
-        env = self.action_yaml.get('x_example_env') or {}
+        name = self.yaml.get('x-example-name')
+        inputs = self.yaml.get('x_example_inputs') or {}
+        env = self.yaml.get('x_example_env') or {}
 
         for (k, d, e) in [
             ('x-env', env, 'example'),
             ('inputs', inputs, 'x-example')
         ]:
-            if action_inputs := self.action_yaml.get(k):
+            if action_inputs := self.yaml.get(k):
                 for input_name, input_meta in action_inputs.items():
                     input_meta = input_meta or {}
                     if input_example := input_meta.get(e):
@@ -231,38 +319,8 @@ class ActionDirective(ObjectDescription, MarkdownParsingMixin):
         example_yaml = [example_yaml]
         return yaml.dump(example_yaml, Dumper=SafeDumper, sort_keys=False)
 
-    def handle_signature(self, sig: str, sig_node: desc_signature) -> ObjDescT:
-        self.env.ref_context['gh-actions:action'] = self.action_id
-        sig_node.clear()
-        sig_prefix = [nodes.Text('action'), addnodes.desc_sig_space()]
-        sig_node += addnodes.desc_annotation(str(sig_prefix), '', *sig_prefix)
-        sig_node += desc_name(sig, sig)
-        name = ws_re.sub(' ', sig)
-        sig_node['fullname'] = sig
-        return name
-
-    def get_signatures(self) -> list[str]:
-        return [self.action_id]
-
-    def _object_hierarchy_parts(self, sig_node) -> tuple[str, ...]:
-        return (sig_node['fullname'],)
-
-    def _toc_entry_name(self, sig_node) -> str:
-        if not sig_node.get('_toc_parts'):
-            return ''
-        name, = sig_node['_toc_parts']
-        return name
-
-    def add_target_and_index(self, name: str, sig: str, signode) -> None:
-        node_id = sphinx.util.nodes.make_id(self.env, self.state.document, self.objtype, name)
-        signode['ids'].append(node_id)
-        self.state.document.note_explicit_target(signode)
-
     def transform_content(self, content_node: addnodes.desc_content) -> None:
-        domain_name = self.name.split(':')[0]
-        domain_obj = self.env.domains[domain_name]
-
-        if description := self.action_yaml.get('description'):
+        if description := self.yaml.get('description'):
             content_node.extend(self.parse_markdown(description))
 
         # Example code
@@ -271,7 +329,7 @@ class ActionDirective(ObjectDescription, MarkdownParsingMixin):
             code_section = nodes.section(
                 '',
                 nodes.rubric(text='Example'),
-                ids=[nodes.make_id(self.action_id + '_example')],
+                ids=[nodes.make_id(self.id + '_example')],
                 names=[nodes.fully_normalize_name('example')],
             )
 
@@ -289,45 +347,19 @@ class ActionDirective(ObjectDescription, MarkdownParsingMixin):
         ]
 
         for (key, title, directive) in item_lists:
-            if item_list := self.action_yaml.get(key):
+            if item_list := self.yaml.get(key):
                 item_list_section = nodes.section(
                     '',
                     nodes.rubric(text=title),
-                    ids=[nodes.make_id(self.action_id + '_' + title)],
+                    ids=[nodes.make_id(self.id + '_' + title)],
                     names=[nodes.fully_normalize_name(title)],
                 )
                 for item_name, item_meta in item_list.items():
                     if item_meta is None:
                         item_meta = {}
                     item_list_section.extend(
-                        domain_obj.directive(directive).generate(item_name, item_meta, self.lineno, self.content_offset, self.state, self.state_machine))
+                        self.domain_obj.directive(directive).generate(item_name, item_meta, self.lineno, self.content_offset, self.state, self.state_machine))
                 content_node.append(item_list_section)
-
-    def run(self):
-        self.action_path = self.options.get('path')
-
-        if self.action_path:
-            action_path = Path(self.env.config['sphinx_gha_repo_root']) / self.action_path
-            for filename in ['action.yml', 'action.yaml']:
-                test_path = action_path / filename
-                if test_path.exists():
-                    self.action_path = test_path
-
-        if self.action_path:
-            with open(self.action_path, 'rt') as stream:
-                self.action_yaml = yaml.full_load(stream)
-        else:
-            self.action_yaml = {}
-
-        self.action_id = 'unknown-action'
-        if len(self.arguments) > 0:
-            self.action_id = self.arguments[0]
-        elif self.action_path:
-            self.action_id = Path(self.action_path).parent.name
-        else:
-            self.error('Neither a path nor an action name provided!')
-
-        return super().run()
 
 
 class GHActionsDomain(Domain):
@@ -374,7 +406,7 @@ class GHActionsDomain(Domain):
                 parent_name = node.get('gh-actions:workflow')
             else:
                 parent_name = None
-            target = '.'.join(filter(None, [parent_name, target])) # extend target full name with parent
+            target = '.'.join(filter(None, [parent_name, target]))  # extend target full name with parent
 
         matches = [
             (docname, anchor) for name, dispname, objtyp, docname, anchor, prio in self.get_objects() if name == target and objtyp == typ
