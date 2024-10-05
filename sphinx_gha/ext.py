@@ -11,7 +11,7 @@ from typing import Iterable
 import sphinx
 import yaml
 from docutils import nodes
-from docutils.nodes import Element
+from docutils.nodes import Element, section
 from docutils.parsers.rst import directives, Directive
 from myst_parser.mdit_to_docutils.base import DocutilsRenderer
 from myst_parser.mdit_to_docutils.sphinx_ import SphinxRenderer
@@ -215,6 +215,10 @@ class ActionsFileDirective(ObjectDescription, MarkdownParsingMixin):
         with open(path, 'rt') as stream:
             return yaml.full_load(stream)
 
+    @cached_property
+    def example(self):
+        return ''
+
     @property
     def domain_obj(self) -> GHActionsDomain:
         domain_name = self.name.split(':')[0]
@@ -249,6 +253,42 @@ class ActionsFileDirective(ObjectDescription, MarkdownParsingMixin):
         self.state.document.note_explicit_target(sig_node)
         self.domain_obj.note_object(sig_node['fullname'], sig_node['name'], self.objtype, node_id)
 
+    def transform_content(self, content_node: addnodes.desc_content) -> None:
+        if description := self.yaml.get('description'):
+            content_node.extend(self.parse_markdown(description))
+
+            # Example code
+
+        if example_yaml := self.example:
+            code_section = nodes.section(
+                '',
+                nodes.rubric(text='Example'),
+                ids=[nodes.make_id(self.id + '_example')],
+                names=[nodes.fully_normalize_name('example')],
+            )
+
+            code = Code('Code', ['yaml'], {}, content=example_yaml.splitlines(), lineno=self.lineno, content_offset=self.content_offset, block_text='',
+                        state=self.state, state_machine=self.state_machine)
+            code_section.extend(code.run())
+            content_node.append(code_section)
+
+    def format_item_list(self, title, directive, items) -> section:
+        item_list_section = nodes.section(
+            '',
+            nodes.rubric(text=title),
+            ids=[nodes.make_id(self.id + '_' + title)],
+            names=[nodes.fully_normalize_name(title)],
+        )
+        for item_name, item_meta in items.items():
+            if item_meta is None:
+                item_meta = {}
+            directive_obj = self.domain_obj.directive(directive)
+            item_nodes = directive_obj.generate(item_name, item_meta,
+                                                self.lineno, self.content_offset,
+                                                self.state, self.state_machine)
+            item_list_section.extend(item_nodes)
+        return item_list_section
+
 
 class ActionDirective(ActionsFileDirective):
     role = 'gh-actions:action'
@@ -273,6 +313,7 @@ class ActionDirective(ActionsFileDirective):
     def id_from_path(cls, path: Path):
         return path.parent.name
 
+    @cached_property
     def example(self):
         if example_yaml := self.options.get('x-example'):
             return example_yaml
@@ -320,23 +361,7 @@ class ActionDirective(ActionsFileDirective):
         return yaml.dump(example_yaml, Dumper=SafeDumper, sort_keys=False)
 
     def transform_content(self, content_node: addnodes.desc_content) -> None:
-        if description := self.yaml.get('description'):
-            content_node.extend(self.parse_markdown(description))
-
-        # Example code
-
-        if example_yaml := self.example():
-            code_section = nodes.section(
-                '',
-                nodes.rubric(text='Example'),
-                ids=[nodes.make_id(self.id + '_example')],
-                names=[nodes.fully_normalize_name('example')],
-            )
-
-            code = Code('Code', ['yaml'], {}, content=example_yaml.splitlines(), lineno=self.lineno, content_offset=self.content_offset, block_text='',
-                        state=self.state, state_machine=self.state_machine)
-            code_section.extend(code.run())
-            content_node.append(code_section)
+        super().transform_content(content_node)
 
         # Items
 
@@ -348,18 +373,45 @@ class ActionDirective(ActionsFileDirective):
 
         for (key, title, directive) in item_lists:
             if item_list := self.yaml.get(key):
-                item_list_section = nodes.section(
-                    '',
-                    nodes.rubric(text=title),
-                    ids=[nodes.make_id(self.id + '_' + title)],
-                    names=[nodes.fully_normalize_name(title)],
-                )
-                for item_name, item_meta in item_list.items():
-                    if item_meta is None:
-                        item_meta = {}
-                    item_list_section.extend(
-                        self.domain_obj.directive(directive).generate(item_name, item_meta, self.lineno, self.content_offset, self.state, self.state_machine))
-                content_node.append(item_list_section)
+                content_node.append(self.format_item_list(title, directive, item_list))
+
+
+class WorkflowInputDirective(ActionsItemDirective):
+    parent_role = 'gh-actions:workflow'
+    fields = ['required', 'default', 'type']
+
+
+class WorkflowSecretDirective(WorkflowInputDirective):
+    pass
+
+
+class WorkflowOutputDirective(ActionsItemDirective):
+    parent_role = 'gh-actions:workflow'
+
+
+class WorkflowDirective(ActionsFileDirective):
+    role = 'gh-actions:workflow'
+    file_type = 'workflow'
+
+    def transform_content(self, content_node: addnodes.desc_content) -> None:
+        super().transform_content(content_node)
+        # Items
+
+        item_lists = [
+            ('inputs', 'Inputs', 'workflow-input'),
+            ('secrets', 'Secrets', 'workflow-secret'),
+            ('outputs', 'Outputs', 'workflow-output'),
+        ]
+
+        if (on_node := self.yaml.get('on') or self.yaml.get(True)) is None:
+            # fucking yaml parses `on` as a boolean even in keys what the fuck
+            return self.error(f'Workflow {self.path} has no `on` node')
+        if (call_node := on_node.get('workflow_call')) is None:
+            return self.error(f'Workflow {self.path} is not callable')
+
+        for (key, title, directive) in item_lists:
+            if item_list := call_node.get(key):
+                content_node.append(self.format_item_list(title, directive, item_list))
 
 
 class GHActionsDomain(Domain):
@@ -370,6 +422,10 @@ class GHActionsDomain(Domain):
         'action-input': ActionInputDirective,
         'action-output': ActionOutputDirective,
         'action-envvar': ActionEnvDirective,
+        'workflow': WorkflowDirective,
+        'workflow-input': WorkflowInputDirective,
+        'workflow-secret': WorkflowSecretDirective,
+        'workflow-output': WorkflowOutputDirective,
     }
     roles = {directive: XRefRole() for directive in directives}
     object_types = {role: ObjType(role) for role in roles.keys()}
