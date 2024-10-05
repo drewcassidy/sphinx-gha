@@ -327,6 +327,9 @@ class ActionDirective(ActionsFileDirective):
         if example_yaml := self.options.get('x-example'):
             return example_yaml
 
+        if self.path is None:
+            return ''
+
         slug = self.env.config['sphinx_gha_repo_slug']
         if slug is None:
             self.error("No repo slug provided. please set the sphinx_gha_repo_slug config variable")
