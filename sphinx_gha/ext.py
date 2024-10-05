@@ -192,7 +192,7 @@ class ActionsFileDirective(ObjectDescription, MarkdownParsingMixin):
     def id_from_path(cls, path: Path) -> str:
         if path is None:
             raise ValueError('path cannot be None')
-        if path_stem := path.stem is not None:
+        if (path_stem := path.stem) is not None:
             return path_stem
         else:
             raise ValueError('path stem cannot be None')
