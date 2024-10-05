@@ -6,7 +6,7 @@ import typing as ty
 from abc import abstractmethod
 from functools import cached_property
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 import sphinx
 import yaml
@@ -189,26 +189,33 @@ class ActionsFileDirective(ObjectDescription, MarkdownParsingMixin):
     }
 
     @classmethod
-    def id_from_path(cls, path: Path):
-        assert (path is not None)
-        return path.stem
+    def id_from_path(cls, path: Path) -> str:
+        if path is None:
+            raise ValueError('path cannot be None')
+        if path_stem := path.stem is not None:
+            return path_stem
+        else:
+            raise ValueError('path stem cannot be None')
 
     @cached_property
-    def id(self):
+    def id(self) -> str:
         if len(self.arguments) > 0:
+            assert self.arguments[0] is not None
             return self.arguments[0]
         elif (path := self.path) is not None:
             return self.id_from_path(path)
         else:
-            self.error('Neither a path nor an action name provided!')
+            self.error('Neither a path nor name provided!')
 
     @cached_property
-    def path(self):
-        path = self.options.get('path')
-        return Path(path) if path is not None else None
+    def path(self) -> Optional[Path]:
+        if (path := self.options.get('path')) is not None:
+            return Path(path)
+        else:
+            return None
 
     @cached_property
-    def yaml(self):
+    def yaml(self) -> dict:
         path = self.path
         if path is None:
             return {}
@@ -216,7 +223,7 @@ class ActionsFileDirective(ObjectDescription, MarkdownParsingMixin):
             return yaml.full_load(stream)
 
     @cached_property
-    def example(self):
+    def example(self) -> str:
         return ''
 
     @property
@@ -228,6 +235,8 @@ class ActionsFileDirective(ObjectDescription, MarkdownParsingMixin):
         return [self.id]
 
     def handle_signature(self, sig: str, sig_node: desc_signature) -> ObjDescT:
+        if sig is None:
+            raise ValueError('sig cannot be None')
         self.env.ref_context[self.role] = self.id
         sig_node.clear()
         sig_prefix = [nodes.Text(self.file_type), addnodes.desc_sig_space()]
@@ -446,7 +455,7 @@ class GHActionsDomain(Domain):
         yield from self.data['objects']
 
     def find_obj(self, env: BuildEnvironment, modname: str, classname: str,
-                 name: str, type: str | None, searchmode: int = 0, ) -> list[tuple[str,]]:
+                 name: str, ty: str | None, searchmode: int = 0, ) -> list[tuple[str,]]:
         pass
 
     def resolve_xref(self, env: BuildEnvironment, fromdocname: str, builder: Builder,
