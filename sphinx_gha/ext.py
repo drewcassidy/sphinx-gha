@@ -210,7 +210,8 @@ class ActionsFileDirective(ObjectDescription, MarkdownParsingMixin):
     @cached_property
     def path(self) -> Optional[Path]:
         if (path := self.options.get('path')) is not None:
-            return Path(path)
+            repo_root = Path(self.env.config['sphinx_gha_repo_root'] or os.getcwd()).absolute()
+            return repo_root / Path(path)
         else:
             return None
 
@@ -308,7 +309,8 @@ class ActionDirective(ActionsFileDirective):
         path = self.options.get('path')
         if path is None:
             return None
-        path = Path(path)
+        repo_root = Path(self.env.config['sphinx_gha_repo_root'] or os.getcwd()).absolute()
+        path = repo_root / Path(path)
         for filename in ['action.yml', 'action.yaml']:
             test_path = path / filename
             if test_path.exists():
