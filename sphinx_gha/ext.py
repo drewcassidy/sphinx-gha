@@ -326,7 +326,7 @@ class ActionDirective(ActionsFileDirective):
 
     @cached_property
     def example(self):
-        if example_yaml := self.options.get('x-example'):
+        if example_yaml := self.yaml.get('x-example'):
             return example_yaml
 
         if self.path is None:
@@ -407,6 +407,63 @@ class WorkflowDirective(ActionsFileDirective):
     role = 'gh-actions:workflow'
     file_type = 'workflow'
 
+    @cached_property
+    def call_node(self):
+        if (on_node := self.yaml.get('on') or self.yaml.get(True)) is None:
+            # fucking yaml parses `on` as a boolean even in keys what the fuck
+            return self.error(f'Workflow {self.path} has no `on` node')
+        if (call_node := on_node.get('workflow_call')) is None:
+            return self.error(f'Workflow {self.path} is not callable')
+        else:
+            return call_node
+
+    @cached_property
+    def example(self):
+        if example_yaml := self.yaml.get('x-example'):
+            return example_yaml
+
+        slug = self.env.config['sphinx_gha_repo_slug']
+        if slug is None:
+            self.error("No repo slug provided. please set the sphinx_gha_repo_slug config variable")
+        action_path = self.path.absolute()
+        repo_root = Path(self.env.config['sphinx_gha_repo_root'] or os.getcwd()).absolute()
+        relative_path = str(action_path.relative_to(repo_root))
+
+        if relative_path != '.':
+            slug = slug + '/' + relative_path
+
+        action_ref = self.env.config['sphinx_gha_repo_ref']
+
+        if action_ref:
+            slug = slug + '@' + action_ref
+
+        name = self.yaml.get('x-example-name')
+        inputs = self.yaml.get('x_example_inputs') or {}
+        secrets = self.yaml.get('x_example_secrets') or {}
+
+        for (k, d, e) in [
+            ('secrets', secrets, 'x-example'),
+            ('inputs', inputs, 'x-example')
+        ]:
+            if action_inputs := self.call_node.get(k):
+                for input_name, input_meta in action_inputs.items():
+                    input_meta = input_meta or {}
+                    if input_example := input_meta.get(e):
+                        d[input_name] = input_example
+
+        example_yaml = {}
+
+        if name:
+            example_yaml['name'] = name
+        example_yaml['uses'] = slug
+        if inputs:
+            example_yaml['with'] = inputs
+        if secrets:
+            example_yaml['secrets'] = secrets
+
+        example_yaml = [example_yaml]
+        return yaml.dump(example_yaml, Dumper=SafeDumper, sort_keys=False)
+
     def transform_content(self, content_node: addnodes.desc_content) -> None:
         super().transform_content(content_node)
         # Items
@@ -417,14 +474,8 @@ class WorkflowDirective(ActionsFileDirective):
             ('outputs', 'Outputs', 'workflow-output'),
         ]
 
-        if (on_node := self.yaml.get('on') or self.yaml.get(True)) is None:
-            # fucking yaml parses `on` as a boolean even in keys what the fuck
-            return self.error(f'Workflow {self.path} has no `on` node')
-        if (call_node := on_node.get('workflow_call')) is None:
-            return self.error(f'Workflow {self.path} is not callable')
-
         for (key, title, directive) in item_lists:
-            if item_list := call_node.get(key):
+            if item_list := self.call_node.get(key):
                 content_node.append(self.format_item_list(title, directive, item_list))
 
 
