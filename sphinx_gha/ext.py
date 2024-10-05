@@ -412,10 +412,10 @@ class WorkflowDirective(ActionsFileDirective):
         if (on_node := self.yaml.get('on') or self.yaml.get(True)) is None:
             # fucking yaml parses `on` as a boolean even in keys what the fuck
             return self.error(f'Workflow {self.path} has no `on` node')
-        if (call_node := on_node.get('workflow_call')) is None:
+        if 'workflow_call' not in on_node:
             return self.error(f'Workflow {self.path} is not callable')
         else:
-            return call_node
+            return on_node.get('workflow_call') or {}
 
     @cached_property
     def example(self):
